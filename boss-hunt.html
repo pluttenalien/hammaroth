@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Hunt your Hammarroth</title>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+  <style>
+    body { margin: 0; overflow: hidden; cursor: crosshair; }
+    canvas {
+      display: block;
+      margin: 0 auto;
+      background: url('golfbana.png') no-repeat center center;
+      background-size: cover;
+    }
+    #hud {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      font-family: 'Press Start 2P', monospace;
+      font-size: 14px;
+      background: rgba(0, 0, 0, 0.5);
+      color: white;
+      padding: 10px;
+      border-radius: 5px;
+    }
+    #eliminated {
+      position: absolute;
+      top: 40%;
+      width: 100%;
+      text-align: center;
+      font-size: 48px;
+      font-family: 'Press Start 2P', monospace;
+      color: red;
+      text-shadow: 2px 2px 4px #000;
+      display: none;
+      z-index: 10;
+    }
+    #startScreen {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: black;
+      color: lime;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      font-family: 'Press Start 2P', monospace;
+      z-index: 999;
+    }
+    #startScreen h1 {
+      font-size: 24px;
+      margin-bottom: 30px;
+    }
+    #startScreen p {
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div id="startScreen">
+    <h1>HUNT YOUR HAMMARROTH</h1>
+    <p>Klicka var som helst för att starta</p>
+  </div>
+  <div id="hud">Poäng: <span id="score">0</span> | Missar: <span id="misses">0</span>/5</div>
+  <div id="eliminated">Hammarrot has been eliminated</div>
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+  <audio id="hitSound" src="bitchslap.mp3"></audio>
+  <audio id="backgroundAudio" src="Bakgrundsljud.mp3" loop></audio>
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const missesEl = document.getElementById('misses');
+    const hitSound = document.getElementById('hitSound');
+    const backgroundAudio = document.getElementById('backgroundAudio');
+    const eliminatedText = document.getElementById('eliminated');
+    backgroundAudio.volume = 1.0;
+
+    let score = 0;
+    let misses = 0;
+    let killCount = 0;
+    let targets = [];
+    let projectiles = [];
+    const trail = [];
+    let firstClick = false;
+
+    const targetImage = new Image();
+    targetImage.src = 'image0 (1).jpeg';
+    const beerImage = new Image();
+    beerImage.src = 'beer.png';
+
+    class Target {
+      constructor() {
+        this.x = Math.random() * (canvas.width - 150);
+        this.y = Math.random() * (canvas.height - 200);
+        this.width = 120;
+        this.height = 160;
+        this.dx = (Math.random() * 2 + 1) * (Math.random() < 0.5 ? -1 : 1);
+        this.dy = (Math.random() * 2 + 1) * (Math.random() < 0.5 ? -1 : 1);
+        this.health = 3;
+      }
+
+      draw() {
+        ctx.drawImage(targetImage, this.x, this.y, this.width, this.height);
+        ctx.fillStyle = 'white';
+        ctx.font = '12px "Press Start 2P", monospace';
+        ctx.fillText(`${3 - this.health}/3`, this.x + this.width / 2 - 15, this.y + this.height + 15);
+      }
+
+      move() {
+        this.x += this.dx;
+        this.y += this.dy;
+        if (this.x < 0 || this.x + this.width > canvas.width) this.dx *= -1;
+        if (this.y < 0 || this.y + this.height > canvas.height) this.dy *= -1;
+      }
+
+      isHit(px, py) {
+        return px >= this.x && px <= this.x + this.width && py >= this.y && py <= this.y + this.height;
+      }
+    }
+
+    class Projectile {
+      constructor(x, y, angle) {
+        this.x = x;
+        this.y = y;
+        this.radius = 8;
+        this.angle = 0;
+        this.speed = 10;
+        this.dx = Math.cos(angle) * this.speed;
+        this.dy = Math.sin(angle) * this.speed;
+      }
+
+      move() {
+        this.x += this.dx;
+        this.y += this.dy;
+        this.angle += 0.3;
+        trail.push({ x: this.x, y: this.y, alpha: 1 });
+      }
+
+      draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.angle);
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = 'white';
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    class Beer {
+      constructor() {
+        this.x = Math.random() * (canvas.width - 60);
+        this.y = 0;
+        this.width = 60;
+        this.height = 80;
+        this.dy = 2;
+        this.active = true;
+      }
+
+      move() {
+        this.y += this.dy;
+        if (this.y > canvas.height) this.active = false;
+      }
+
+      draw() {
+        ctx.drawImage(beerImage, this.x, this.y, this.width, this.height);
+      }
+    }
+
+    let beers = [];
+
+    function showEliminatedText() {
+      eliminatedText.style.display = 'block';
+      setTimeout(() => {
+        eliminatedText.style.display = 'none';
+      }, 2000);
+    }
+
+    canvas.addEventListener('click', e => {
+      if (!firstClick) {
+        const startScreen = document.getElementById('startScreen');
+        if (startScreen) startScreen.remove();
+        backgroundAudio.play();
+        firstClick = true;
+      }
+
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const angle = Math.atan2(my - canvas.height, mx - canvas.width / 2);
+      projectiles.push(new Projectile(canvas.width / 2, canvas.height, angle));
+    });
+
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !firstClick) {
+        const startScreen = document.getElementById('startScreen');
+        if (startScreen) startScreen.remove();
+        backgroundAudio.play();
+        firstClick = true;
+      }
+    });
+
+    function gameLoop() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      for (let i = 0; i < trail.length; i++) {
+        const t = trail[i];
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255,255,255,${t.alpha})`;
+        ctx.fill();
+        t.alpha -= 0.03;
+        if (t.alpha <= 0) {
+          trail.splice(i, 1);
+          i--;
+        }
+      }
+
+      if (targets.length < 3) targets.push(new Target());
+
+      targets.forEach(target => {
+        target.move();
+        target.draw();
+      });
+
+      projectiles.forEach((ball, i) => {
+        ball.move();
+        ball.draw();
+        for (let j = 0; j < targets.length; j++) {
+          if (targets[j].isHit(ball.x, ball.y)) {
+            projectiles.splice(i, 1);
+            targets[j].health--;
+            hitSound.currentTime = 0;
+            hitSound.play();
+            if (targets[j].health <= 0) {
+              targets.splice(j, 1);
+              killCount++;
+              score++;
+              scoreEl.textContent = score;
+              showEliminatedText();
+              if (killCount % 3 === 0) beers.push(new Beer());
+            }
+            return;
+          }
+        }
+        if (ball.x < 0 || ball.x > canvas.width || ball.y < 0 || ball.y > canvas.height) {
+          projectiles.splice(i, 1);
+          misses++;
+          missesEl.textContent = misses;
+          if (misses >= 5) {
+            alert('Game Over! Du fick ' + score + ' poäng.');
+            document.location.reload();
+          }
+        }
+      });
+
+      beers.forEach((beer, i) => {
+        beer.move();
+        beer.draw();
+        targets.forEach(target => {
+          if (beer.active && beer.x + beer.width > target.x && beer.x < target.x + target.width &&
+              beer.y + beer.height > target.y && beer.y < target.y + target.height) {
+            if (target.health < 3) target.health++;
+            beer.active = false;
+          }
+        });
+        if (!beer.active) beers.splice(i, 1);
+      });
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    targetImage.onload = () => { gameLoop(); };
+  </script>
+</body>
+</html>
